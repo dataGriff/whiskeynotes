@@ -1,0 +1,1185 @@
+openapi: 3.1.0
+
+info:
+  title: Whiskey Notes API
+  version: 1.0.0
+  description: |
+    # Whiskey Notes API
+
+    A sophisticated whiskey discovery and collection management platform that combines a
+    curated inventory with personal tasting notes and community ratings.
+
+    ## Overview
+
+    The API is organized around three primary resources:
+
+    - **Whiskeys** – The master catalog of whiskeys. Admins manage the inventory; all
+      authenticated users can browse and filter it.
+    - **Reviews** – User-authored tasting notes and star ratings (1–5) attached to a
+      specific whiskey. Each user may leave at most one review per whiskey.
+    - **User Profiles** – Personal identity, plus the two personal collections a user
+      maintains: **Tried** (whiskeys already tasted) and **Wishlist** (whiskeys to try).
+
+    ## Authentication & Roles
+
+    All requests must include a valid bearer token obtained from the authentication
+    provider (GitHub Spark). The token encodes the caller's identity and role:
+
+    | Role  | Description |
+    |-------|-------------|
+    | `user`  | Default role. Can read the catalog, write reviews, and manage their own profile and collections. |
+    | `admin` | The application owner. In addition to user capabilities, admins can create, update, and delete whiskeys. |
+
+    ## Conventions
+
+    - All timestamps are **Unix milliseconds** (integer).
+    - Ratings use **increments of 0.5** in the range **1–5** inclusive.
+    - IDs are opaque strings (URL-safe base-36 + random suffix).
+    - The API returns `application/json` for all responses.
+    - Errors follow the [RFC 7807](https://datatracker.ietf.org/doc/html/rfc7807)
+      Problem Details format.
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: Whiskey Notes Support
+    url: https://whiskeynotes.co.uk
+
+servers:
+  - url: https://api.whiskeynotes.co.uk/v1
+    description: Production
+
+tags:
+  - name: Whiskeys
+    description: Browse and manage the master whiskey catalog.
+  - name: Reviews
+    description: Tasting notes and star ratings for whiskeys.
+  - name: Profile
+    description: User profile, including nickname and preference settings.
+  - name: Collections
+    description: Personal **Tried** and **Wishlist** collections.
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # ── Whiskeys ──────────────────────────────────────────────────────────────
+
+  /whiskeys:
+    get:
+      operationId: listWhiskeys
+      summary: List all whiskeys
+      description: |
+        Returns the full whiskey catalog. Supports multi-criteria filtering,
+        free-text search across `name` and `distillery`, and several sort options.
+        Results are returned in a single page (no cursor pagination) because the
+        catalog is small enough to be loaded in full.
+      tags: [Whiskeys]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/SortBy'
+        - name: types
+          in: query
+          description: |
+            Comma-separated list of whiskey types to include
+            (e.g. `Single Malt,Bourbon`).
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/WhiskeyType'
+          style: form
+          explode: false
+          example: Single Malt,Blended Malt
+        - name: regions
+          in: query
+          description: |
+            Comma-separated list of regions to include
+            (e.g. `Speyside,Islay`).
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/WhiskeyRegion'
+          style: form
+          explode: false
+          example: Speyside,Islay
+        - name: attributes
+          in: query
+          description: |
+            Comma-separated list of flavor attributes that must **all** be
+            present on the returned whiskeys (AND logic).
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: false
+          example: Peaty,Smoky
+        - name: minAge
+          in: query
+          description: Minimum age in years (inclusive). Whiskeys with no age statement are excluded.
+          schema:
+            type: integer
+            minimum: 1
+          example: 10
+        - name: maxAge
+          in: query
+          description: Maximum age in years (inclusive).
+          schema:
+            type: integer
+            minimum: 1
+          example: 25
+        - name: minAbv
+          in: query
+          description: Minimum ABV percentage (inclusive).
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 100
+          example: 40
+        - name: maxAbv
+          in: query
+          description: Maximum ABV percentage (inclusive).
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 100
+          example: 60
+      responses:
+        '200':
+          description: Catalog returned successfully.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Whiskey'
+              example:
+                - id: glenfiddich-12
+                  name: Glenfiddich 12 Year Old
+                  distillery: Glenfiddich
+                  type: Single Malt
+                  region: Speyside
+                  age: 12
+                  abv: 40
+                  description: >-
+                    A classic Speyside single malt with distinctive fresh pear and
+                    subtle oak flavors.
+                  attributes: [Fruity, Smooth, Sweet, Oak]
+                  createdAt: 1700000000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      operationId: createWhiskey
+      summary: Add a whiskey to the catalog
+      description: |
+        Creates a new entry in the master whiskey catalog.
+        **Requires admin role.**
+      tags: [Whiskeys]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhiskeyInput'
+            example:
+              name: Glenfiddich 12 Year Old
+              distillery: Glenfiddich
+              type: Single Malt
+              region: Speyside
+              age: 12
+              abv: 40
+              description: >-
+                A classic Speyside single malt with distinctive fresh pear and
+                subtle oak flavors. Matured in American bourbon and Spanish
+                sherry oak casks for at least 12 years.
+              attributes: [Fruity, Smooth, Sweet, Oak]
+              imageUrl: https://cdn.whiskeynotes.co.uk/images/glenfiddich-12.jpg
+      responses:
+        '201':
+          description: Whiskey created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Whiskey'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /whiskeys/{whiskeyId}:
+    parameters:
+      - $ref: '#/components/parameters/WhiskeyId'
+
+    get:
+      operationId: getWhiskey
+      summary: Get a single whiskey
+      description: Returns full details for a specific whiskey, including its metadata.
+      tags: [Whiskeys]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Whiskey found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Whiskey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      operationId: updateWhiskey
+      summary: Update a whiskey
+      description: |
+        Replaces all mutable fields of the specified whiskey.
+        **Requires admin role.**
+      tags: [Whiskeys]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhiskeyInput'
+      responses:
+        '200':
+          description: Whiskey updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Whiskey'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      operationId: deleteWhiskey
+      summary: Delete a whiskey
+      description: |
+        Permanently removes a whiskey and all its associated reviews from the
+        catalog.
+        **Requires admin role.**
+      tags: [Whiskeys]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Whiskey deleted successfully. No content returned.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ── Reviews ───────────────────────────────────────────────────────────────
+
+  /whiskeys/{whiskeyId}/reviews:
+    parameters:
+      - $ref: '#/components/parameters/WhiskeyId'
+
+    get:
+      operationId: listReviewsForWhiskey
+      summary: List reviews for a whiskey
+      description: |
+        Returns all reviews for the specified whiskey, newest first.
+        Also includes a computed `averageRating` across all reviews.
+      tags: [Reviews]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Reviews returned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    post:
+      operationId: createReview
+      summary: Submit a review for a whiskey
+      description: |
+        Creates a tasting note and star rating for the specified whiskey.
+
+        Business rules:
+        - A user may only submit **one review per whiskey**. Attempting to create a
+          second review returns `409 Conflict`. Use `PUT` to update an existing review.
+        - `rating` must be between 1 and 5 inclusive, in increments of 0.5.
+        - `notes` may be empty, but the field must be present.
+      tags: [Reviews]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewInput'
+            example:
+              rating: 4.5
+              notes: >-
+                Absolutely stunning! The peat smoke is incredible but not
+                overwhelming. Complex layers reveal themselves with each sip.
+      responses:
+        '201':
+          description: Review created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Review'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /whiskeys/{whiskeyId}/reviews/{reviewId}:
+    parameters:
+      - $ref: '#/components/parameters/WhiskeyId'
+      - $ref: '#/components/parameters/ReviewId'
+
+    get:
+      operationId: getReview
+      summary: Get a single review
+      description: Returns a specific review for the given whiskey.
+      tags: [Reviews]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Review found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Review'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      operationId: updateReview
+      summary: Update a review
+      description: |
+        Replaces the `rating` and/or `notes` of an existing review.
+        Users may only update their **own** reviews.
+      tags: [Reviews]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewInput'
+      responses:
+        '200':
+          description: Review updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Review'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      operationId: deleteReview
+      summary: Delete a review
+      description: |
+        Permanently removes a review.
+        Users may only delete their **own** reviews; admins may delete any review.
+      tags: [Reviews]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Review deleted successfully. No content returned.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ── User Profile ──────────────────────────────────────────────────────────
+
+  /users/{userId}/profile:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+
+    get:
+      operationId: getUserProfile
+      summary: Get a user's profile
+      description: |
+        Returns the profile for the specified user, including their nickname
+        and the IDs of whiskeys in their **Tried** and **Wishlist** collections.
+        Users may only fetch their own profile unless they are an admin.
+      tags: [Profile]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Profile found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      operationId: upsertUserProfile
+      summary: Create or update a user's profile
+      description: |
+        Creates a user profile if one does not yet exist, or updates the
+        nickname of an existing one. Users may only modify their own profile.
+
+        On first call (nickname setup), the server initializes the `tried` and
+        `wishlist` collections to empty arrays.
+      tags: [Profile]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserProfileInput'
+            example:
+              nickname: WhiskyExplorer
+      responses:
+        '200':
+          description: Profile updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ── Collections – Wishlist ────────────────────────────────────────────────
+
+  /users/{userId}/wishlist:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+
+    get:
+      operationId: getWishlist
+      summary: Get a user's wishlist
+      description: |
+        Returns the full `Whiskey` objects for every entry in the user's
+        wishlist, in the order they were added (oldest first).
+      tags: [Collections]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Wishlist returned successfully.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Whiskey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{userId}/wishlist/{whiskeyId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/WhiskeyId'
+
+    put:
+      operationId: addToWishlist
+      summary: Add a whiskey to the wishlist
+      description: |
+        Adds the specified whiskey to the user's wishlist. Idempotent – adding
+        a whiskey that is already on the wishlist returns `200` without
+        duplicating the entry.
+      tags: [Collections]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Whiskey is on the wishlist (either newly added or already present).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      operationId: removeFromWishlist
+      summary: Remove a whiskey from the wishlist
+      description: |
+        Removes the specified whiskey from the user's wishlist. Idempotent –
+        removing a whiskey that is not on the wishlist returns `204` without error.
+      tags: [Collections]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Whiskey removed from wishlist (or was not present). No content returned.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ── Collections – Tried ───────────────────────────────────────────────────
+
+  /users/{userId}/tried:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+
+    get:
+      operationId: getTriedList
+      summary: Get a user's tried list
+      description: |
+        Returns the full `Whiskey` objects for every entry in the user's tried
+        list (whiskeys they have already tasted), in the order they were added
+        (oldest first).
+      tags: [Collections]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Tried list returned successfully.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Whiskey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{userId}/tried/{whiskeyId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/WhiskeyId'
+
+    put:
+      operationId: addToTriedList
+      summary: Mark a whiskey as tried
+      description: |
+        Adds the specified whiskey to the user's tried list. Idempotent –
+        adding a whiskey that is already in the list returns `200` without
+        duplicating the entry.
+      tags: [Collections]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Whiskey is in the tried list (either newly added or already present).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      operationId: removeFromTriedList
+      summary: Remove a whiskey from the tried list
+      description: |
+        Removes the specified whiskey from the user's tried list. Idempotent –
+        removing a whiskey that is not in the list returns `204` without error.
+      tags: [Collections]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Whiskey removed from tried list (or was not present). No content returned.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+
+  # ── Security ───────────────────────────────────────────────────────────────
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        A JSON Web Token issued by the GitHub Spark authentication provider.
+        Include it as `Authorization: Bearer <token>` in every request.
+
+  # ── Parameters ─────────────────────────────────────────────────────────────
+  parameters:
+    WhiskeyId:
+      name: whiskeyId
+      in: path
+      required: true
+      description: The unique identifier of the whiskey.
+      schema:
+        type: string
+      example: glenfiddich-12
+
+    ReviewId:
+      name: reviewId
+      in: path
+      required: true
+      description: The unique identifier of the review.
+      schema:
+        type: string
+      example: review-1
+
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: The unique identifier of the user.
+      schema:
+        type: string
+      example: lxk3z9mq4r
+
+    SearchQuery:
+      name: q
+      in: query
+      description: |
+        Free-text search string matched against the whiskey's `name` and
+        `distillery` fields (case-insensitive substring match).
+      schema:
+        type: string
+      example: Glenfiddich
+
+    SortBy:
+      name: sortBy
+      in: query
+      description: |
+        Determines the order of returned whiskeys.
+
+        | Value    | Description |
+        |----------|-------------|
+        | `rating` | Descending aggregate community rating (default) |
+        | `name`   | Alphabetical by whiskey name |
+        | `age`    | Ascending age statement; whiskeys with no age statement appear last |
+        | `abv`    | Ascending ABV percentage |
+        | `newest` | Most recently added to the catalog first |
+      schema:
+        $ref: '#/components/schemas/SortOption'
+      example: rating
+
+  # ── Schemas ────────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── Enums ─────────────────────────────────────────────────────────────────
+
+    WhiskeyType:
+      type: string
+      description: The production category of the whiskey.
+      enum:
+        - Single Malt
+        - Blended Malt
+        - Blended Scotch
+        - Single Grain
+        - Bourbon
+        - Rye
+        - Single Pot Still
+        - Irish Blended
+        - Japanese
+        - Other
+      example: Single Malt
+
+    WhiskeyRegion:
+      type: string
+      description: The geographical provenance of the whiskey.
+      enum:
+        - Speyside
+        - Islay
+        - Highland
+        - Lowland
+        - Campbeltown
+        - Island
+        - Irish
+        - American
+        - Japanese
+        - Other
+      example: Speyside
+
+    SortOption:
+      type: string
+      description: Available sort criteria for the whiskey catalog.
+      enum:
+        - rating
+        - name
+        - age
+        - abv
+        - newest
+      default: rating
+
+    # ── Whiskey ───────────────────────────────────────────────────────────────
+
+    Whiskey:
+      type: object
+      description: A whiskey entry in the master catalog.
+      required:
+        - id
+        - name
+        - distillery
+        - type
+        - region
+        - abv
+        - description
+        - attributes
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: Unique, URL-safe identifier for the whiskey.
+          readOnly: true
+          example: glenfiddich-12
+        name:
+          type: string
+          description: Full commercial name of the whiskey.
+          minLength: 1
+          maxLength: 200
+          example: Glenfiddich 12 Year Old
+        distillery:
+          type: string
+          description: Name of the distillery or producer.
+          minLength: 1
+          maxLength: 200
+          example: Glenfiddich
+        type:
+          $ref: '#/components/schemas/WhiskeyType'
+        region:
+          $ref: '#/components/schemas/WhiskeyRegion'
+        age:
+          type: integer
+          description: |
+            Age statement in years. Omitted for No Age Statement (NAS) expressions.
+          minimum: 1
+          maximum: 100
+          example: 12
+        abv:
+          type: number
+          format: float
+          description: Alcohol By Volume as a percentage.
+          minimum: 0
+          maximum: 100
+          example: 40
+        description:
+          type: string
+          description: Long-form tasting and background description written by the admin.
+          minLength: 1
+          example: >-
+            A classic Speyside single malt with distinctive fresh pear and
+            subtle oak flavors. Matured in American bourbon and Spanish sherry
+            oak casks for at least 12 years.
+        attributes:
+          type: array
+          description: |
+            Curated flavor and style tags (e.g. `Peaty`, `Fruity`, `Smooth`).
+            Used by the filter system to narrow results.
+          items:
+            type: string
+            minLength: 1
+          minItems: 0
+          uniqueItems: true
+          example: [Fruity, Smooth, Sweet, Oak]
+        imageUrl:
+          type: string
+          format: uri
+          description: Optional URL pointing to a product image.
+          example: https://cdn.whiskeynotes.co.uk/images/glenfiddich-12.jpg
+        createdAt:
+          type: integer
+          format: int64
+          description: Unix timestamp (milliseconds) when this entry was created.
+          readOnly: true
+          example: 1700000000000
+
+    WhiskeyInput:
+      type: object
+      description: |
+        Payload used to create or fully update a whiskey. All mutable fields
+        must be supplied; `id` and `createdAt` are set by the server.
+      required:
+        - name
+        - distillery
+        - type
+        - region
+        - abv
+        - description
+        - attributes
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Glenfiddich 12 Year Old
+        distillery:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Glenfiddich
+        type:
+          $ref: '#/components/schemas/WhiskeyType'
+        region:
+          $ref: '#/components/schemas/WhiskeyRegion'
+        age:
+          type: integer
+          minimum: 1
+          maximum: 100
+          example: 12
+        abv:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+          example: 40
+        description:
+          type: string
+          minLength: 1
+          example: >-
+            A classic Speyside single malt with distinctive fresh pear and
+            subtle oak flavors.
+        attributes:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          minItems: 0
+          uniqueItems: true
+          example: [Fruity, Smooth, Sweet, Oak]
+        imageUrl:
+          type: string
+          format: uri
+          example: https://cdn.whiskeynotes.co.uk/images/glenfiddich-12.jpg
+
+    # ── Review ────────────────────────────────────────────────────────────────
+
+    Review:
+      type: object
+      description: A user's tasting note and star rating for a specific whiskey.
+      required:
+        - id
+        - whiskeyId
+        - userId
+        - nickname
+        - rating
+        - notes
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: Unique identifier for this review.
+          readOnly: true
+          example: review-1
+        whiskeyId:
+          type: string
+          description: ID of the whiskey being reviewed.
+          readOnly: true
+          example: glenfiddich-12
+        userId:
+          type: string
+          description: ID of the user who wrote the review.
+          readOnly: true
+          example: lxk3z9mq4r
+        nickname:
+          type: string
+          description: Display name of the reviewer at the time of writing.
+          readOnly: true
+          example: WhiskyExplorer
+        rating:
+          type: number
+          format: float
+          description: Star rating from 1 to 5 in increments of 0.5.
+          minimum: 1
+          maximum: 5
+          multipleOf: 0.5
+          example: 4.5
+        notes:
+          type: string
+          description: Free-form tasting notes. May be an empty string.
+          example: >-
+            A fantastic introduction to single malts. The pear notes are
+            prominent and it's incredibly smooth.
+        createdAt:
+          type: integer
+          format: int64
+          description: Unix timestamp (milliseconds) when the review was submitted.
+          readOnly: true
+          example: 1700003600000
+
+    ReviewInput:
+      type: object
+      description: Payload for creating or updating a review.
+      required:
+        - rating
+        - notes
+      properties:
+        rating:
+          type: number
+          format: float
+          description: Star rating from 1 to 5 in increments of 0.5.
+          minimum: 1
+          maximum: 5
+          multipleOf: 0.5
+          example: 4.5
+        notes:
+          type: string
+          description: Free-form tasting notes. May be an empty string.
+          example: >-
+            Absolutely stunning! The peat smoke is incredible but not
+            overwhelming.
+
+    ReviewsResponse:
+      type: object
+      description: |
+        Reviews for a whiskey together with an aggregated average rating.
+      required:
+        - reviews
+        - averageRating
+        - reviewCount
+      properties:
+        reviews:
+          type: array
+          description: All reviews for the whiskey, ordered newest first.
+          items:
+            $ref: '#/components/schemas/Review'
+        averageRating:
+          type: number
+          format: float
+          description: |
+            Mean of all review ratings, rounded to two decimal places.
+            `null` when there are no reviews yet.
+          minimum: 1
+          maximum: 5
+          nullable: true
+          example: 4.25
+        reviewCount:
+          type: integer
+          description: Total number of reviews.
+          minimum: 0
+          example: 4
+
+    # ── User Profile ──────────────────────────────────────────────────────────
+
+    UserProfile:
+      type: object
+      description: |
+        Identity and personal collection state for a single user.
+      required:
+        - userId
+        - nickname
+        - tried
+        - wishlist
+      properties:
+        userId:
+          type: string
+          description: Unique identifier for the user (matches the token subject).
+          readOnly: true
+          example: lxk3z9mq4r
+        nickname:
+          type: string
+          description: User-chosen display name shown on reviews.
+          minLength: 1
+          maxLength: 50
+          example: WhiskyExplorer
+        tried:
+          type: array
+          description: Ordered list of whiskey IDs the user has already tasted.
+          items:
+            type: string
+          uniqueItems: true
+          example:
+            - glenfiddich-12
+            - lagavulin-16
+        wishlist:
+          type: array
+          description: Ordered list of whiskey IDs the user wants to try.
+          items:
+            type: string
+          uniqueItems: true
+          example:
+            - macallan-18-sherry
+            - yamazaki-12
+
+    UserProfileInput:
+      type: object
+      description: Mutable portion of the user profile.
+      required:
+        - nickname
+      properties:
+        nickname:
+          type: string
+          description: User-chosen display name.
+          minLength: 1
+          maxLength: 50
+          example: WhiskyExplorer
+
+    # ── Error (RFC 7807) ──────────────────────────────────────────────────────
+
+    Problem:
+      type: object
+      description: |
+        Error details following the Problem Details for HTTP APIs format
+        (RFC 7807).
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          description: A URI reference that identifies the problem type.
+          example: https://api.whiskeynotes.co.uk/problems/validation-error
+        title:
+          type: string
+          description: Short, human-readable summary of the problem type.
+          example: Validation Error
+        status:
+          type: integer
+          description: The HTTP status code.
+          example: 400
+        detail:
+          type: string
+          description: Human-readable explanation of this specific occurrence.
+          example: "'rating' must be between 1 and 5 in increments of 0.5."
+        instance:
+          type: string
+          format: uri
+          description: URI reference identifying the specific occurrence of the problem.
+          example: /whiskeys/glenfiddich-12/reviews
+
+  # ── Responses ──────────────────────────────────────────────────────────────
+  responses:
+
+    BadRequest:
+      description: |
+        The request body or query parameters failed validation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.whiskeynotes.co.uk/problems/validation-error
+            title: Validation Error
+            status: 400
+            detail: "'rating' must be between 1 and 5 in increments of 0.5."
+            instance: /whiskeys/glenfiddich-12/reviews
+
+    Unauthorized:
+      description: |
+        No valid bearer token was supplied, or the token has expired.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.whiskeynotes.co.uk/problems/unauthorized
+            title: Unauthorized
+            status: 401
+            detail: A valid bearer token is required.
+
+    Forbidden:
+      description: |
+        The authenticated user does not have permission to perform this action.
+        This is typically returned when a non-admin attempts a write operation on
+        the whiskey catalog, or when a user tries to modify another user's data.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.whiskeynotes.co.uk/problems/forbidden
+            title: Forbidden
+            status: 403
+            detail: Only admins may create or modify whiskeys.
+
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.whiskeynotes.co.uk/problems/not-found
+            title: Not Found
+            status: 404
+            detail: No whiskey found with id 'glenfiddich-99'.
+
+    Conflict:
+      description: |
+        The request conflicts with the current state of the resource. Returned
+        when a user attempts to create a second review for the same whiskey.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.whiskeynotes.co.uk/problems/conflict
+            title: Conflict
+            status: 409
+            detail: >-
+              You have already reviewed this whiskey. Use PUT to update your
+              existing review.
